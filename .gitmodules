@@ -1,0 +1,3 @@
+[submodule "susl_base"]
+	path = susl_base
+	url = git@github.com:LSX-UniWue/SuSL-in-depth.git

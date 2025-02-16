@@ -1,0 +1,2 @@
+-r susl_base/requirements.txt
+scanpy==1.10.4
