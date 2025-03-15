@@ -5,6 +5,7 @@ from torchmetrics import MetricCollection
 
 from datasets.tabula_muris import TabulaMurisDataset
 from implementations.lightning import LightningGMMModelWeightDecay
+from implementations.susl_dataset import TransformableLabeledDatasetFacade
 from implementations.utils import create_susl_dataset
 from implementations.variational_layer import NegativeBinomialVariationalLayer
 from susl_base.data.data_module import SemiUnsupervisedDataModule
@@ -35,24 +36,30 @@ def run() -> None:
     classes_to_hide = [
         train_dataset.classes.index(c) for c in ["B cell", "hepatocyte", "keratinocyte", "mesenchymal cell"]
     ]
-    train_dataset_labeled, train_dataset_unlabeled = create_susl_dataset(
+    train_dataset_labeled, train_dataset_unlabeled, class_mapper = create_susl_dataset(
         dataset=train_dataset,
         num_labels=0.2,
         classes_to_hide=classes_to_hide,
     )
     validation_dataset = TabulaMurisDataset(stage="val", min_counts=min_counts, min_genes=min_genes)
     test_dataset = TabulaMurisDataset(stage="test", min_counts=min_counts, min_genes=min_genes)
+
+    # Create model
+    n_l, n_aug, n_classes = len(test_dataset.classes) - len(classes_to_hide), 10, len(test_dataset.classes)
+    n_x, n_y, n_z = 2537, n_l + n_aug, 50
+    hidden_dim = 100
     datamodule = SemiUnsupervisedDataModule(
         train_dataset_labeled=train_dataset_labeled,
         train_dataset_unlabeled=train_dataset_unlabeled,
-        validation_dataset=validation_dataset,
-        test_dataset=test_dataset,
+        validation_dataset=TransformableLabeledDatasetFacade(
+            validation_dataset, indices=list(range(len(validation_dataset))), class_mapper=class_mapper
+        ),
+        test_dataset=TransformableLabeledDatasetFacade(
+            test_dataset, indices=list(range(len(test_dataset))), class_mapper=class_mapper
+        ),
         batch_size=128,
     )
-    # Create model
-    n_l, n_aug, n_classes = len(test_dataset.classes) - len(classes_to_hide), 40, len(test_dataset.classes)
-    n_x, n_y, n_z = 2537, n_l + n_aug, 50
-    hidden_dim = 100
+
     q_y_x_module = Sequential(
         Linear(in_features=n_x, out_features=hidden_dim),
         ReLU(),
@@ -61,6 +68,7 @@ def run() -> None:
         Linear(in_features=hidden_dim, out_features=n_y),
     )
     # Change for Gaussian or Bernoulli, depending on experiment for decoder
+    # Be sure to update input/target transform in the datasets
     p_x_z_module = NegativeBinomialVariationalLayer(
         feature_extractor=Sequential(
             Linear(in_features=n_z, out_features=hidden_dim),
@@ -114,8 +122,9 @@ def run() -> None:
             prefix="test_",
         ),
         weight_decay=1e-6,
+        cosine_t_max=150,
     )
-    trainer = Trainer(max_epochs=150, check_val_every_n_epoch=2)
+    trainer = Trainer(max_epochs=150, check_val_every_n_epoch=2, limit_train_batches=5)
     trainer.fit(model=lt_model, datamodule=datamodule)
     trainer.test(model=lt_model, datamodule=datamodule)
 
