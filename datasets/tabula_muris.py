@@ -10,9 +10,7 @@ from torch.utils.data import Dataset
 def get_highly_variable_genes(data: AnnData) -> Tensor:
     normalize_total(data, target_sum=1e4)
     log1p(data)
-    hvg = highly_variable_genes(
-        data, min_mean=0.0125, max_mean=3, min_disp=0.5, inplace=False
-    ).highly_variable.values.reshape(1, -1)
+    hvg = highly_variable_genes(data, min_mean=0.0125, max_mean=3, min_disp=0.5, inplace=False).highly_variable.values
     print(f"Using {hvg.sum()} genes; Out of {hvg.size}")
     return tensor(hvg)
 
@@ -90,21 +88,22 @@ class TabulaMurisDataset(Dataset):
         self.__hvg = get_highly_variable_genes(data.copy())
         match stage:
             case "train_u":
-                self.__data = data[data.obs["train_mode"] == 0]
+                data = data[data.obs["train_mode"] == 0]
             case "train":
-                self.__data = data[data.obs["train_mode"] == 1]
+                data = data[data.obs["train_mode"] == 1]
             case "val":
-                self.__data = data[data.obs["train_mode"] == 2]
+                data = data[data.obs["train_mode"] == 2]
             case "test":
-                self.__data = data[data.obs["train_mode"] == 3]
+                data = data[data.obs["train_mode"] == 3]
+        self.__x_data = from_numpy(data.X.todense())
+        self.__y_data = list(map(self.classes.index, data.obs[self.label_column]))
 
     def __len__(self) -> int:
-        return len(self.__data)
+        return self.__x_data.shape[0]
 
     def __getitem__(self, idx: int) -> Tuple[Tensor, int]:
-        x = from_numpy(self.__data.X[idx][self.__hvg])
-        y = self.__data.obs[self.label_column].iloc[idx]
-        y = self.classes.index(y)
+        x = self.__x_data[idx][self.__hvg]
+        y = self.__y_data[idx]
         return x, y
 
 
