@@ -1,3 +1,5 @@
+from functools import partial
+
 from lightning import Trainer
 from torch import Tensor
 from torch.nn import Sequential, Linear, ReLU, Identity
@@ -5,10 +7,10 @@ from torchmetrics import MetricCollection
 
 from datasets.tabula_muris import TabulaMurisDataset
 from implementations.lightning import LightningGMMModelWeightDecay
-from implementations.susl_dataset import TransformableLabeledDatasetFacade
-from implementations.utils import create_susl_dataset
+from implementations.susl_dataset import TransformableLabeledDatasetFacade, TransformableDatasetFacade
 from implementations.variational_layer import NegativeBinomialVariationalLayer
 from susl_base.data.data_module import SemiUnsupervisedDataModule
+from susl_base.data.utils import create_susl_dataset
 from susl_base.metrics.cluster_and_label import ClusterAccuracy
 from susl_base.networks.gmm_dgm import EntropyRegularizedGaussianMixtureDeepGenerativeModel
 from susl_base.networks.latent_layer import LatentLayer
@@ -30,16 +32,35 @@ def get_prior(n_l: int, n_aug: int) -> Tensor:
     return 0.5 * tensor(n_l * [1 / n_l] + n_aug * [1 / n_aug])
 
 
+# L1 normalization
+def input_transform(x: Tensor) -> Tensor:
+    return x / x.sum()
+
+
+# For NB (use L1 for Bernoulli)
+# Gaussian can be either
+def target_transform(x: Tensor) -> Tensor:
+    return x
+
+
 def run() -> None:
     min_counts, min_genes = 1000, 500
     train_dataset = TabulaMurisDataset(stage="train", min_counts=min_counts, min_genes=min_genes)
     classes_to_hide = [
         train_dataset.classes.index(c) for c in ["B cell", "hepatocyte", "keratinocyte", "mesenchymal cell"]
     ]
+    labeled_dataset_facade_init = partial(
+        TransformableLabeledDatasetFacade, input_transform=input_transform, target_transform=target_transform
+    )
+    dataset_facade_init = partial(
+        TransformableDatasetFacade, input_transform=input_transform, target_transform=target_transform
+    )
     train_dataset_labeled, train_dataset_unlabeled, class_mapper = create_susl_dataset(
         dataset=train_dataset,
         num_labels=0.2,
         classes_to_hide=classes_to_hide,
+        labeled_dataset_facade_init=labeled_dataset_facade_init,
+        dataset_facade_init=dataset_facade_init,
     )
     validation_dataset = TabulaMurisDataset(stage="val", min_counts=min_counts, min_genes=min_genes)
     test_dataset = TabulaMurisDataset(stage="test", min_counts=min_counts, min_genes=min_genes)
@@ -52,10 +73,18 @@ def run() -> None:
         train_dataset_labeled=train_dataset_labeled,
         train_dataset_unlabeled=train_dataset_unlabeled,
         validation_dataset=TransformableLabeledDatasetFacade(
-            validation_dataset, indices=list(range(len(validation_dataset))), class_mapper=class_mapper
+            validation_dataset,
+            indices=list(range(len(validation_dataset))),
+            class_mapper=class_mapper,
+            input_transform=input_transform,
+            target_transform=target_transform,
         ),
         test_dataset=TransformableLabeledDatasetFacade(
-            test_dataset, indices=list(range(len(test_dataset))), class_mapper=class_mapper
+            test_dataset,
+            indices=list(range(len(test_dataset))),
+            class_mapper=class_mapper,
+            input_transform=input_transform,
+            target_transform=target_transform,
         ),
         batch_size=128,
     )
@@ -124,7 +153,7 @@ def run() -> None:
         weight_decay=1e-6,
         cosine_t_max=150,
     )
-    trainer = Trainer(max_epochs=150, check_val_every_n_epoch=2, limit_train_batches=5)
+    trainer = Trainer(max_epochs=150, check_val_every_n_epoch=2)
     trainer.fit(model=lt_model, datamodule=datamodule)
     trainer.test(model=lt_model, datamodule=datamodule)
 
